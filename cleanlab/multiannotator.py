@@ -141,12 +141,12 @@ def get_consensus_label(
             for idx, label_mode in tied_idx.items():
                 consensus_label[idx] = np.random.choice(label_mode)
 
-    elif consensus_method == "dawid_skene":
-        from crowdkit.aggregation import DawidSkene
+    # elif consensus_method == "dawid_skene":
+    #     from crowdkit.aggregation import DawidSkene
 
-        labels_multiannotator_stacked = labels_multiannotator.stack().reset_index()
-        labels_multiannotator_stacked.columns = ["task", "worker", "label"]
-        consensus_label = DawidSkene().fit_predict(labels_multiannotator_stacked)
+    #     labels_multiannotator_stacked = labels_multiannotator.stack().reset_index()
+    #     labels_multiannotator_stacked.columns = ["task", "worker", "label"]
+    #     consensus_label = DawidSkene().fit_predict(labels_multiannotator_stacked)
 
     else:
         raise ValueError(
@@ -275,6 +275,24 @@ def _get_quality_of_consensus(
         normalized_entropy = get_normalized_entropy(pred_probs=pred_probs)
         quality_of_consensus = np.exp(-(soft_cross_entropy - normalized_entropy + 1))
         ranked_quality = -(soft_cross_entropy - normalized_entropy)
+
+    elif quality_method == "weighted_lqs_DS":
+        from crowdkit.aggregation import DawidSkene
+
+        labels_multiannotator_stacked = labels_multiannotator.stack().reset_index()
+        labels_multiannotator_stacked.columns = ["task", "worker", "label"]
+        DS = DawidSkene().fit(labels_multiannotator_stacked)
+
+        pred_probs_DS = DS.probas_.values
+
+        w_model = 0.5
+        weighted_pred_probs = w_model * pred_probs + (1 - w_model) * pred_probs_DS
+
+        quality_of_consensus = get_label_quality_scores(
+            consensus_label, weighted_pred_probs, **kwargs
+        )
+        ranked_quality = quality_of_consensus
+        post_pred_probs = weighted_pred_probs
 
     elif quality_method == "bayes_constant":
         # likelihood = probability that any annotator annotates any example correctly
@@ -645,7 +663,7 @@ def _get_consensus_stats(
             [DS.ranked_quality_.values[i, l] for i, l in enumerate(majority_consensus_label)]
         )
 
-    elif consensus_method == "GLAD":
+    elif consensus_method == "glad":
         from crowdkit.aggregation import GLAD
 
         labels_multiannotator_stacked = labels_multiannotator.stack().reset_index()
@@ -759,6 +777,7 @@ def _get_annotator_quality(
         "bayes_anno_avg",
         "bayes_anno_weighted",
         "bayes_model_acc",
+        "glad",
     ]
 
     def try_overall_label_health_score(labels, pred_probs):
@@ -779,6 +798,8 @@ def _get_annotator_quality(
         "bayes_anno_avg",
         "bayes_anno_weighted",
         "bayes_model_acc",
+        "glad",
+        "weighted_lqs_DS",
     ]:
         overall_annotator_quality = labels_multiannotator.apply(
             lambda s: try_overall_label_health_score(
@@ -802,7 +823,7 @@ def _get_annotator_quality(
         raise ValueError(
             f"""
             {quality_method} is not a valid quality method!
-            Please choose a valid consensus_method: {valid_methods}
+            Please choose a valid quality_method: {valid_methods}
             """
         )
 
@@ -889,30 +910,30 @@ def get_multiannotator_stats(
             .to_numpy()
         )
 
-    elif quality_method == "glad":
-        from crowdkit.aggregation import GLAD
+    # elif quality_method == "glad":
+    #     from crowdkit.aggregation import GLAD
 
-        labels_multiannotator_stacked = labels_multiannotator.stack().reset_index()
-        labels_multiannotator_stacked.columns = ["task", "worker", "label"]
-        G = GLAD().fit(labels_multiannotator_stacked)
+    #     labels_multiannotator_stacked = labels_multiannotator.stack().reset_index()
+    #     labels_multiannotator_stacked.columns = ["task", "worker", "label"]
+    #     G = GLAD().fit(labels_multiannotator_stacked)
 
-        complete_index = [
-            (i, j)
-            for i in G.errors_.index.get_level_values(0).unique()
-            for j in sorted(DS.errors_.index.get_level_values(1).unique())
-        ]
-        errors = G.errors_.reindex(complete_index)
-        missing_idx = errors[errors.isna().all(axis=1) == True].index
-        avg_annotator_error = G.errors_.groupby(["label"]).mean()
+    #     complete_index = [
+    #         (i, j)
+    #         for i in G.errors_.index.get_level_values(0).unique()
+    #         for j in sorted(DS.errors_.index.get_level_values(1).unique())
+    #     ]
+    #     errors = G.errors_.reindex(complete_index)
+    #     missing_idx = errors[errors.isna().all(axis=1) == True].index
+    #     avg_annotator_error = G.errors_.groupby(["label"]).mean()
 
-        for w, l in missing_idx:
-            errors.loc[w, l] = avg_annotator_error.loc[l]
+    #     for w, l in missing_idx:
+    #         errors.loc[w, l] = avg_annotator_error.loc[l]
 
-        overall_label_health_score_df = (
-            errors.groupby("worker")
-            .apply(lambda x: np.mean(np.diag(x)))[labels_multiannotator.columns]
-            .to_numpy()
-        )
+    #     overall_label_health_score_df = (
+    #         errors.groupby("worker")
+    #         .apply(lambda x: np.mean(np.diag(x)))[labels_multiannotator.columns]
+    #         .to_numpy()
+    #     )
 
     else:
         overall_label_health_score_df = _get_annotator_quality(
@@ -1139,6 +1160,8 @@ def get_label_quality_multiannotator(
     if verbose or return_annotator_stats:
         if consensus_method == "dawid_skene":
             quality_method = "dawid_skene"
+        if consensus_method == "dawid_skene_prior":
+            quality_method = "dawid_skene_prior"
         if consensus_method == "glad":
             quality_method = "glad"
 
