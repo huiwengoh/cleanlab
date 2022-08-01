@@ -294,6 +294,110 @@ def _get_quality_of_consensus(
         ranked_quality = quality_of_consensus
         post_pred_probs = weighted_pred_probs
 
+    elif quality_method == "weighted_lqs_anno":
+
+        def compute_likelihood(example, true_label, likelihood, num_classes):
+            example = example.dropna()
+            return np.mean(
+                [
+                    likelihood.loc[annotator]
+                    if annotator_label == true_label
+                    else (1 - likelihood.loc[annotator]) / (num_classes - 1)
+                    for annotator, annotator_label in zip(example.index, example)
+                ]
+            )
+
+        annotator_agreement_with_consensus = labels_multiannotator.apply(
+            lambda s: np.mean(s[pd.notna(s)] == consensus_label[pd.notna(s)]),
+            axis=0,
+        )
+
+        num_classes = pred_probs.shape[1]
+        prod_annotator_likelihood = np.vstack(
+            labels_multiannotator.apply(
+                lambda s: np.array(
+                    [
+                        compute_likelihood(
+                            s, true_label, annotator_agreement_with_consensus, num_classes
+                        )
+                        for true_label in range(num_classes)
+                    ]
+                ),
+                axis=1,
+            )
+        )
+
+        weighted_pred_probs = np.average(
+            (pred_probs, prod_annotator_likelihood),
+            weights=(
+                np.full((len(num_annotations), num_classes), np.sqrt(np.mean(num_annotations))),
+                np.sqrt(np.hstack([num_annotations.reshape(-1, 1)] * num_classes)),
+            ),
+            axis=0,
+        )
+
+        quality_of_consensus = get_label_quality_scores(
+            consensus_label, weighted_pred_probs, **kwargs
+        )
+        ranked_quality = quality_of_consensus
+        post_pred_probs = weighted_pred_probs
+
+    elif quality_method == "weighted_lqs_DS_matrix":
+        from crowdkit.aggregation import DawidSkene
+
+        def compute_likelihood(example, true_label, likelihood):
+            example = example.dropna()
+            return np.mean(
+                [
+                    likelihood.loc[(annotator, annotator_label)][true_label]
+                    for annotator, annotator_label in zip(example.index, example)
+                ]
+            )
+
+        labels_multiannotator_stacked = labels_multiannotator.stack().reset_index()
+        labels_multiannotator_stacked.columns = ["task", "worker", "label"]
+        DS = DawidSkene().fit(labels_multiannotator_stacked)
+
+        complete_index = [
+            (i, j)
+            for i in DS.errors_.index.get_level_values(0).unique()
+            for j in sorted(DS.errors_.index.get_level_values(1).unique())
+        ]
+        likelihood = DS.errors_.reindex(complete_index)
+        missing_idx = likelihood[likelihood.isna().all(axis=1) == True].index
+        avg_annotator_likelihood = DS.errors_.groupby(["label"]).mean()
+
+        for w, l in missing_idx:
+            likelihood.loc[w, l] = avg_annotator_likelihood.loc[l]
+
+        num_classes = pred_probs.shape[1]
+        prod_annotator_likelihood = np.vstack(
+            labels_multiannotator.apply(
+                lambda s: np.array(
+                    [
+                        compute_likelihood(s, true_label, likelihood)
+                        for true_label in range(num_classes)
+                    ]
+                ),
+                axis=1,
+            )
+        )
+
+        weighted_pred_probs = np.average(
+            (pred_probs, prod_annotator_likelihood),
+            weights=(
+                np.full((len(num_annotations), num_classes), np.sqrt(np.mean(num_annotations))),
+                np.sqrt(np.hstack([num_annotations.reshape(-1, 1)] * num_classes)),
+            ),
+            axis=0,
+        )
+
+        quality_of_consensus = get_label_quality_scores(
+            consensus_label, weighted_pred_probs, **kwargs
+        )
+        ranked_quality = quality_of_consensus
+        post_pred_probs = weighted_pred_probs
+
     elif quality_method == "bayes_constant":
         # likelihood = probability that any annotator annotates any example correctly
         def compute_likelihood(example, true_label, likelihood, num_classes):
@@ -800,6 +904,8 @@ def _get_annotator_quality(
         "bayes_model_acc",
         "glad",
         "weighted_lqs_DS",
+        "weighted_lqs_anno",
+        "weighted_lqs_DS_matrix",
     ]:
         overall_annotator_quality = labels_multiannotator.apply(
             lambda s: try_overall_label_health_score(
