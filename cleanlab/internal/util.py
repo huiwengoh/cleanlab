@@ -522,3 +522,35 @@ def smart_display_dataframe(df):  # pragma: no cover
         display(df)
     except:
         print(df)
+
+
+def compute_expected_calibration_error(labels, pred_probs, num_bins=10):
+    """Computes the expected calibration error (ECE) given the predicted probabilites of a model,
+    raises a warning if the ECE is too high and seems to not be out-of-sample.
+
+    Parameters
+    ----------
+    labels : np.ndarray
+        An array of shape ``(N,)`` of labels.
+        Elements must be in the set 0, 1, ..., K-1, where K is the number of classes.
+
+    pred_probs : np.ndarray
+        P(label=k|x) is a matrix with K model-predicted probabilities.
+        Each row of this matrix corresponds to an example `x` and contains the model-predicted
+        probabilities that `x` belongs to each possible class.
+        The columns must be ordered such that these probabilities correspond to class 0, 1, 2,..., K-1.
+
+    num_bins : int, optional
+        Number of bins to split the data into."""
+    max_pred_probs = np.max(pred_probs, axis=1)
+    pred_labels = np.argmax(pred_probs, axis=1)
+
+    bins = np.linspace(1 / num_bins, 1, num_bins - 1, endpoint=False)
+    bin_idx = np.digitize(max_pred_probs, bins)
+    bin_masks = np.array([bin_idx == i for i in np.unique(bin_idx)])
+
+    avg_confidence = np.array([np.mean(max_pred_probs[mask]) for mask in bin_masks])
+    avg_accuracy = np.array([np.mean(pred_labels[mask] == labels[mask]) for mask in bin_masks])
+    bin_counts = np.array([np.sum(mask) for mask in bin_masks])
+
+    ECE = np.average(np.abs(avg_confidence - avg_accuracy), weights=bin_counts)
