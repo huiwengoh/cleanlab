@@ -562,7 +562,6 @@ def _get_quality_of_consensus(
 
         num_classes = pred_probs.shape[1]
         w_model = avg_annotator_error / model_error
-        print(f"model weight = {w_model}")
         # w_model = np.mean(num_annotations) * np.mean(
         #     np.argmax(pred_probs_subset, axis=1) == consensus_label_subset
         # )
@@ -582,6 +581,72 @@ def _get_quality_of_consensus(
                     ],
                     weights=[w_model]
                     + annotator_agreement_with_consensus_weighted[example.index].to_list(),
+                )
+                for true_label in range(num_classes)
+            ]
+
+        quality_of_consensus = get_label_quality_scores(
+            consensus_label, weighted_pred_probs, **kwargs
+        )
+        ranked_quality = quality_of_consensus
+        post_pred_probs = weighted_pred_probs
+
+    elif quality_method == "ensemble_anno_weighted_error":
+
+        def get_annotator_agreement_weighted(labels_subset, num_annotations_subset, annotator_id):
+            agreement_frac = labels_subset.apply(
+                lambda s: np.mean(s[pd.notna(s)].drop(annotator_id) == s[annotator_id]), axis=1
+            )
+            np.nan_to_num(agreement_frac, copy=False, nan=0)
+            weighted_avg = np.average(agreement_frac, weights=num_annotations_subset - 1)
+            return weighted_avg
+
+        annotator_agreement_with_consensus_weighted = labels_multiannotator.apply(
+            lambda s: get_annotator_agreement_weighted(
+                labels_multiannotator[pd.notna(s)], num_annotations[pd.notna(s)], s.name
+            )
+        )
+
+        num_classes = pred_probs.shape[1]
+
+        annotator_error = 1 - annotator_agreement_with_consensus_weighted
+        most_likely_class_error = np.mean(
+            consensus_label != np.argmax(np.bincount(consensus_label, minlength=num_classes))
+        )
+        normalized_annotator_accuracy = np.clip(
+            1 - (annotator_error / most_likely_class_error), a_min=0, a_max=None
+        )
+
+        mask = labels_multiannotator.count(axis=1) != 1
+        labels_multiannotator_subset = labels_multiannotator[mask]
+        consensus_label_subset = consensus_label[mask]
+        pred_probs_subset = pred_probs[mask]
+
+        avg_annotator_error = np.mean(
+            labels_multiannotator_subset.apply(
+                lambda s: np.mean(s[pd.notna(s)] != consensus_label_subset[pd.notna(s)]),
+                axis=0,
+            )
+        )
+        model_error = np.mean(np.argmax(pred_probs_subset, axis=1) != consensus_label_subset)
+
+        w_model = (1 - (model_error / most_likely_class_error)) * np.sqrt(np.mean(num_annotations))
+
+        likelihood = np.mean(annotator_agreement[num_annotations != 1])
+        weighted_pred_probs = np.full(pred_probs.shape, np.nan)
+
+        for i in range(len(labels_multiannotator)):
+            example = labels_multiannotator.iloc[i].dropna()
+            weighted_pred_probs[i] = [
+                np.average(
+                    [pred_probs[i, true_label]]
+                    + [
+                        likelihood
+                        if annotator_label == true_label
+                        else (1 - likelihood) / (num_classes - 1)
+                        for annotator_label in example
+                    ],
+                    weights=[w_model] + normalized_annotator_accuracy[example.index].to_list(),
                 )
                 for true_label in range(num_classes)
             ]
@@ -1443,6 +1508,7 @@ def _get_annotator_quality(
     consensus_label: np.ndarray,
     num_annotations: np.ndarray,
     annotator_agreement: np.ndarray,
+    quality_of_consensus: np.ndarray,
     quality_method: str = "auto",
 ) -> pd.DataFrame:
     """Returns annotator quality score for each annotator.
@@ -1542,6 +1608,19 @@ def _get_annotator_quality(
                 get_label_quality_scores(s[pd.notna(s)].astype("int32"), pred_probs[pd.notna(s)])
             )
         ).to_numpy()
+    elif quality_method == "ensemble_anno_weighted_error":
+        mask = labels_multiannotator.count(axis=1) != 1
+        labels_multiannotator_subset = labels_multiannotator[mask]
+        consensus_label_subset = consensus_label[mask]
+        quality_of_consensus_subset = quality_of_consensus[mask]
+
+        overall_annotator_quality = labels_multiannotator_subset.apply(
+            lambda s: np.average(
+                s[pd.notna(s)] == consensus_label_subset[pd.notna(s)],
+                weights=quality_of_consensus_subset[pd.notna(s)],
+            ),
+            axis=0,
+        )
     elif quality_method == "auto":
         overall_annotator_quality = labels_multiannotator.apply(
             lambda s: np.average(
@@ -1577,6 +1656,7 @@ def get_multiannotator_stats(
     consensus_label: np.ndarray,
     num_annotations: np.ndarray,
     annotator_agreement: np.ndarray,
+    quality_of_consensus: np.ndarray,
     quality_method: str = "auto",
 ) -> pd.DataFrame:
     """Returns overall statistics about each annotator.
@@ -1682,6 +1762,7 @@ def get_multiannotator_stats(
             consensus_label=consensus_label,
             num_annotations=num_annotations,
             annotator_agreement=annotator_agreement,
+            quality_of_consensus=quality_of_consensus,
             quality_method=quality_method,
         )
 
@@ -1911,6 +1992,7 @@ def get_label_quality_multiannotator(
             consensus_label=consensus_label,
             num_annotations=num_annotations,
             annotator_agreement=annotator_agreement,
+            quality_of_consensus=quality_of_consensus,
             quality_method=quality_method,
         )
 
