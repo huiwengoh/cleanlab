@@ -719,4 +719,4 @@ def compute_expected_calibration_error(labels, pred_probs, num_bins=10):
     avg_accuracy = np.array([np.mean(pred_labels[mask] == labels[mask]) for mask in bin_masks])
     bin_counts = np.array([np.sum(mask) for mask in bin_masks])
 
-    ECE = np.average(np.abs(avg_confidence - avg_accuracy), weights=bin_counts)
+    ECE = np.average(avg_confidence - avg_accuracy, weights=bin_counts)
