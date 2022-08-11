@@ -1592,35 +1592,90 @@ def _get_annotator_quality(
         "weighted_lqs_DS_matrix",
         "ensemble_anno_avg",
         "ensemble_anno_weighted",
+        "ensemble_anno_weighted_error",
         "ensemble_optimize",
         "ensemble_optimize_model",
         "ensemble_optimize_long",
         "ensemble_optimize_model_long",
         "ensemble_log_reg",
     ]:
-        # overall_annotator_quality = labels_multiannotator.apply(
-        #     lambda s: try_overall_label_health_score(
-        #         s[pd.notna(s)].astype("int32"), pred_probs[pd.notna(s)]
-        #     )
-        # ).to_numpy()
-        overall_annotator_quality = labels_multiannotator.apply(
+        # # overall_annotator_quality = labels_multiannotator.apply(
+        # #     lambda s: try_overall_label_health_score(
+        # #         s[pd.notna(s)].astype("int32"), pred_probs[pd.notna(s)]
+        # #     )
+        # # ).to_numpy()
+        # # overall_annotator_quality = labels_multiannotator.apply(
+        # #     lambda s: np.mean(
+        # #         get_label_quality_scores(s[pd.notna(s)].astype("int32"), pred_probs[pd.notna(s)])
+        # #     )
+        # # ).to_numpy()
+        # # elif quality_method == "ensemble_anno_weighted_error":
+
+        # mask = labels_multiannotator.count(axis=1) != 1
+        # labels_multiannotator_subset = labels_multiannotator[mask]
+        # consensus_label_subset = consensus_label[mask]
+        # quality_of_consensus_subset = quality_of_consensus[mask]
+
+        # overall_annotator_quality = labels_multiannotator_subset.apply(
+        #     lambda s: np.average(
+        #         s[pd.notna(s)] == consensus_label_subset[pd.notna(s)],
+        #         weights=quality_of_consensus_subset[pd.notna(s)],
+        #     ),
+        #     axis=0,
+        # )
+
+        def get_annotator_agreement_weighted(labels_subset, num_annotations_subset, annotator_id):
+            agreement_frac = labels_subset.apply(
+                lambda s: np.mean(s[pd.notna(s)].drop(annotator_id) == s[annotator_id]),
+                axis=1,
+            )
+            np.nan_to_num(agreement_frac, copy=False, nan=0)
+            weighted_avg = np.average(agreement_frac, weights=num_annotations_subset - 1)
+            return weighted_avg
+
+        annotator_agreement_with_consensus_weighted = labels_multiannotator.apply(
+            lambda s: get_annotator_agreement_weighted(
+                labels_multiannotator[pd.notna(s)],
+                num_annotations[pd.notna(s)],
+                s.name,
+            )
+        )
+
+        num_classes = pred_probs.shape[1]
+
+        annotator_error = 1 - annotator_agreement_with_consensus_weighted
+        most_likely_class_error = np.mean(
+            consensus_label
+            != np.argmax(np.bincount(consensus_label.astype("int64"), minlength=num_classes))
+        )
+        w_annotator = np.clip(1 - (annotator_error / most_likely_class_error), a_min=0, a_max=None)
+
+        mask = labels_multiannotator.count(axis=1) != 1
+        labels_multiannotator_subset = labels_multiannotator[mask]
+        consensus_label_subset = consensus_label[mask]
+        pred_probs_subset = pred_probs[mask]
+
+        model_error = np.mean(np.argmax(pred_probs_subset, axis=1) != consensus_label_subset)
+        w_model = (1 - (model_error / most_likely_class_error)) * np.sqrt(np.mean(num_annotations))
+
+        frac_num_annotators = np.mean(num_annotations) / len(w_annotator)
+        w_annotator_adjusted = w_annotator.sum() * frac_num_annotators
+
+        w = w_model / (w_model + w_annotator_adjusted)
+
+        annotator_agreement_weighted = labels_multiannotator_subset.apply(
+            lambda s: np.mean(s[pd.notna(s)] == consensus_label_subset[pd.notna(s)]),
+            axis=0,
+        )
+
+        annotator_lqs = labels_multiannotator.apply(
             lambda s: np.mean(
                 get_label_quality_scores(s[pd.notna(s)].astype("int32"), pred_probs[pd.notna(s)])
             )
         ).to_numpy()
-    elif quality_method == "ensemble_anno_weighted_error":
-        mask = labels_multiannotator.count(axis=1) != 1
-        labels_multiannotator_subset = labels_multiannotator[mask]
-        consensus_label_subset = consensus_label[mask]
-        quality_of_consensus_subset = quality_of_consensus[mask]
 
-        overall_annotator_quality = labels_multiannotator_subset.apply(
-            lambda s: np.average(
-                s[pd.notna(s)] == consensus_label_subset[pd.notna(s)],
-                weights=quality_of_consensus_subset[pd.notna(s)],
-            ),
-            axis=0,
-        )
+        overall_annotator_quality = w * annotator_lqs + (1 - w) * annotator_agreement_weighted
+
     elif quality_method == "auto":
         overall_annotator_quality = labels_multiannotator.apply(
             lambda s: np.average(
@@ -2006,6 +2061,8 @@ def get_label_quality_multiannotator(
         return (label_quality_scores_multiannotator, annotator_stats, post_pred_probs)
     elif return_annotator_stats:
         return (label_quality_scores_multiannotator, annotator_stats)
+    elif return_post_pred_probs:
+        return (label_quality_scores_multiannotator, post_pred_probs)
     else:
         return label_quality_scores_multiannotator
 
