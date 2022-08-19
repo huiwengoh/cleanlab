@@ -2065,9 +2065,3 @@ def get_label_quality_multiannotator(
         return (label_quality_scores_multiannotator, post_pred_probs)
     else:
         return label_quality_scores_multiannotator
-
-    # return (
-    #     (label_quality_scores_multiannotator, annotator_stats)
-    #     if return_annotator_stats
-    #     else label_quality_scores_multiannotator
-    # )
