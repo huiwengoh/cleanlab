@@ -375,7 +375,6 @@ def _get_quality_of_consensus(
         w_model = np.max([(1 - (model_error / most_likely_class_error)), 0]) * np.sqrt(
             np.mean(num_annotations)
         )
-
         likelihood = np.mean(annotator_agreement[num_annotations != 1])
         weighted_pred_probs = np.full(pred_probs.shape, np.nan)
 
@@ -603,6 +602,7 @@ def _get_consensus_stats(
 def _get_annotator_quality(
     labels_multiannotator: pd.DataFrame,
     pred_probs: np.ndarray,
+    post_pred_probs: np.ndarray,
     consensus_label: np.ndarray,
     num_annotations: np.ndarray,
     annotator_agreement: np.ndarray,
@@ -711,7 +711,9 @@ def _get_annotator_quality(
 
         annotator_lqs = labels_multiannotator.apply(
             lambda s: np.mean(
-                get_label_quality_scores(s[pd.notna(s)].astype("int32"), pred_probs[pd.notna(s)])
+                get_label_quality_scores(
+                    s[pd.notna(s)].astype("int32"), post_pred_probs[pd.notna(s)]
+                )
             )
         ).to_numpy()
 
@@ -739,7 +741,7 @@ def _get_annotator_quality(
 
         overall_annotator_quality = labels_multiannotator.apply(
             get_avg_annotator_label_quality_score,
-            pred_probs=pred_probs,
+            pred_probs=post_pred_probs,
         )
     elif quality_method == "active_label_cleaning":
         overall_annotator_quality = labels_multiannotator.apply(
@@ -810,7 +812,9 @@ def _get_annotator_quality(
 
         annotator_lqs = labels_multiannotator.apply(
             lambda s: np.mean(
-                get_label_quality_scores(s[pd.notna(s)].astype("int32"), pred_probs[pd.notna(s)])
+                get_label_quality_scores(
+                    s[pd.notna(s)].astype("int32"), post_pred_probs[pd.notna(s)]
+                )
             )
         ).to_numpy()
 
@@ -830,6 +834,7 @@ def _get_annotator_quality(
 def get_multiannotator_stats(
     labels_multiannotator: pd.DataFrame,
     pred_probs: np.ndarray,
+    post_pred_probs: np.ndarray,
     consensus_label: np.ndarray,
     num_annotations: np.ndarray,
     annotator_agreement: np.ndarray,
@@ -920,6 +925,7 @@ def get_multiannotator_stats(
         overall_label_health_score_df = _get_annotator_quality(
             labels_multiannotator=labels_multiannotator,
             pred_probs=pred_probs,
+            post_pred_probs=post_pred_probs,
             consensus_label=consensus_label,
             num_annotations=num_annotations,
             annotator_agreement=annotator_agreement,
@@ -1142,7 +1148,8 @@ def get_label_quality_multiannotator(
     if verbose or return_annotator_stats:
         annotator_stats = get_multiannotator_stats(
             labels_multiannotator=labels_multiannotator,
-            pred_probs=post_pred_probs,
+            pred_probs=pred_probs,
+            post_pred_probs=post_pred_probs,
             consensus_label=consensus_label,
             num_annotations=num_annotations,
             annotator_agreement=annotator_agreement,
