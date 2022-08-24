@@ -695,10 +695,12 @@ def _get_annotator_quality(
         pred_probs_subset = pred_probs[mask]
 
         model_error = np.mean(np.argmax(pred_probs_subset, axis=1) != consensus_label_subset)
-        w_model = (1 - (model_error / most_likely_class_error)) * np.sqrt(np.mean(num_annotations))
+        w_model = np.max([(1 - (model_error / most_likely_class_error)), 0]) * np.sqrt(
+            np.mean(num_annotations)
+        )
 
         frac_num_annotators = np.mean(num_annotations) / len(w_annotator)
-        w_annotator_adjusted = w_annotator.sum() * frac_num_annotators
+        w_annotator_adjusted = np.sum(w_annotator) * frac_num_annotators
 
         w = w_model / (w_model + w_annotator_adjusted)
 
@@ -714,6 +716,7 @@ def _get_annotator_quality(
         ).to_numpy()
 
         overall_annotator_quality = w * annotator_lqs + (1 - w) * annotator_agreement_weighted
+
     elif quality_method == "agreement":
         mask = labels_multiannotator.count(axis=1) != 1
         labels_multiannotator_subset = labels_multiannotator[mask]
