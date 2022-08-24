@@ -661,14 +661,7 @@ def _get_annotator_quality(
     #         )
     #         return np.NaN
 
-    if quality_method in [
-        "crowdlab",
-        "label_quality_score",
-        "active_label_cleaning",
-        "empirical_bayes",
-        "glad",
-        "no_perannotator_weights",
-    ]:
+    if quality_method == "crowdlab":
 
         def get_annotator_agreement_weighted(labels_subset, num_annotations_subset, annotator_id):
             agreement_frac = labels_subset.apply(
@@ -728,8 +721,97 @@ def _get_annotator_quality(
 
         overall_annotator_quality = labels_multiannotator_subset.apply(
             lambda s: np.mean(s[pd.notna(s)] == consensus_label_subset[pd.notna(s)]),
+        )
+    elif quality_method == "label_quality_score":
+
+        def get_avg_annotator_label_quality_score(annotator_label, pred_probs):
+            mask = pd.notna(annotator_label)
+
+            annotator_label_quality_score_subset = get_label_quality_scores(
+                labels=annotator_label[mask].to_numpy().astype("int64"),
+                pred_probs=pred_probs[mask],
+            )
+
+            return np.mean(annotator_label_quality_score_subset)
+
+        overall_annotator_quality = labels_multiannotator.apply(
+            get_avg_annotator_label_quality_score,
+            pred_probs=pred_probs,
+        )
+    elif quality_method == "active_label_cleaning":
+        overall_annotator_quality = labels_multiannotator.apply(
+            lambda s: np.mean(quality_of_consensus[pd.notna(s)])
+        )
+    elif quality_method == "no_perannotator_weights":
+
+        def compute_likelihood(example, true_label, likelihood, num_classes):
+            example = example.dropna()
+            return np.mean(
+                [
+                    likelihood.loc[annotator]
+                    if annotator_label == true_label
+                    else (1 - likelihood.loc[annotator]) / (num_classes - 1)
+                    for annotator, annotator_label in zip(example.index, example)
+                ]
+            )
+
+        def get_annotator_agreement_weighted(labels_subset, num_annotations_subset, annotator_id):
+            agreement_frac = labels_subset.apply(
+                lambda s: np.mean(s[pd.notna(s)].drop(annotator_id) == s[annotator_id]), axis=1
+            )
+            np.nan_to_num(agreement_frac, copy=False, nan=0)
+            weighted_avg = np.average(agreement_frac, weights=num_annotations_subset - 1)
+            return weighted_avg
+
+        annotator_agreement_with_consensus_weighted = labels_multiannotator.apply(
+            lambda s: get_annotator_agreement_weighted(
+                labels_multiannotator[pd.notna(s)], num_annotations[pd.notna(s)], s.name
+            )
+        )
+
+        num_classes = pred_probs.shape[1]
+        prod_annotator_likelihood = np.vstack(
+            labels_multiannotator.apply(
+                lambda s: np.array(
+                    [
+                        compute_likelihood(
+                            s, true_label, annotator_agreement_with_consensus_weighted, num_classes
+                        )
+                        for true_label in range(num_classes)
+                    ]
+                ),
+                axis=1,
+            )
+        )
+
+        mask = labels_multiannotator.count(axis=1) != 1
+        labels_multiannotator_subset = labels_multiannotator[mask]
+        consensus_label_subset = consensus_label[mask]
+
+        annotator_agreement_with_consensus = labels_multiannotator_subset.apply(
+            lambda s: np.mean(s[pd.notna(s)] == consensus_label_subset[pd.notna(s)]),
             axis=0,
         )
+
+        model_accuracy = np.mean(np.argmax(pred_probs[mask], axis=1) == consensus_label[mask])
+        annotator_accuracy = np.average(
+            annotator_agreement_with_consensus, weights=labels_multiannotator[mask].count()
+        )
+
+        w = model_accuracy / (model_accuracy + annotator_accuracy)
+
+        annotator_agreement_weighted = labels_multiannotator_subset.apply(
+            lambda s: np.mean(s[pd.notna(s)] == consensus_label_subset[pd.notna(s)]),
+            axis=0,
+        )
+
+        annotator_lqs = labels_multiannotator.apply(
+            lambda s: np.mean(
+                get_label_quality_scores(s[pd.notna(s)].astype("int32"), pred_probs[pd.notna(s)])
+            )
+        ).to_numpy()
+
+        overall_annotator_quality = w * annotator_lqs + (1 - w) * annotator_agreement_weighted
     else:
         raise ValueError(
             f"""
@@ -797,7 +879,7 @@ def get_multiannotator_stats(
             return np.NaN
 
     # Compute overall quality of each annotator's labels
-    if quality_method == "dawid_skene":
+    if quality_method in ["dawid_skene", "empirical_bayes"]:
         from crowdkit.aggregation import DawidSkene
 
         labels_multiannotator_stacked = labels_multiannotator.stack().reset_index()
@@ -822,30 +904,14 @@ def get_multiannotator_stats(
             .to_numpy()
         )
 
-    # elif quality_method == "glad":
-    #     from crowdkit.aggregation import GLAD
+    elif quality_method == "glad":
+        from crowdkit.aggregation import GLAD
 
-    #     labels_multiannotator_stacked = labels_multiannotator.stack().reset_index()
-    #     labels_multiannotator_stacked.columns = ["task", "worker", "label"]
-    #     G = GLAD().fit(labels_multiannotator_stacked)
+        labels_multiannotator_stacked = labels_multiannotator.stack().reset_index()
+        labels_multiannotator_stacked.columns = ["task", "worker", "label"]
+        G = GLAD().fit(labels_multiannotator_stacked)
 
-    #     complete_index = [
-    #         (i, j)
-    #         for i in G.errors_.index.get_level_values(0).unique()
-    #         for j in sorted(DS.errors_.index.get_level_values(1).unique())
-    #     ]
-    #     errors = G.errors_.reindex(complete_index)
-    #     missing_idx = errors[errors.isna().all(axis=1) == True].index
-    #     avg_annotator_error = G.errors_.groupby(["label"]).mean()
-
-    #     for w, l in missing_idx:
-    #         errors.loc[w, l] = avg_annotator_error.loc[l]
-
-    #     overall_label_health_score_df = (
-    #         errors.groupby("worker")
-    #         .apply(lambda x: np.mean(np.diag(x)))[labels_multiannotator.columns]
-    #         .to_numpy()
-    #     )
+        overall_label_health_score_df = G.alphas_
 
     else:
         overall_label_health_score_df = _get_annotator_quality(
@@ -890,8 +956,9 @@ def get_label_quality_multiannotator(
     pred_probs: np.ndarray,
     *,
     consensus_method: Union[str, List[str]] = "majority",
-    quality_method: str = "auto",
+    quality_method: str = "crowdlab",
     return_annotator_stats: bool = False,  # sort by lowest overall_quality first
+    return_post_pred_probs: bool = False,
     verbose: bool = True,
     kwargs: dict = {},
 ) -> Union[pd.DataFrame, Tuple[pd.DataFrame, pd.DataFrame]]:
@@ -1086,7 +1153,29 @@ def get_label_quality_multiannotator(
         )
         print(annotator_stats.to_string())
 
+    if return_annotator_stats and return_post_pred_probs:
+        return (label_quality_scores_multiannotator, annotator_stats, post_pred_probs)
     elif return_annotator_stats:
         return (label_quality_scores_multiannotator, annotator_stats)
+    elif return_post_pred_probs:
+        return (label_quality_scores_multiannotator, post_pred_probs)
     else:
         return label_quality_scores_multiannotator
+
+
+def get_improved_consensus_label(
+    labels_multiannotator: pd.DataFrame or np.ndarray,
+    pred_probs: np.ndarray,
+):
+    label_quality_multiannotator, improved_pred_probs = get_label_quality_multiannotator(
+        labels_multiannotator=labels_multiannotator,
+        pred_probs=pred_probs,
+        consensus_method="majority",
+        quality_method="crowdlab",
+        verbose=False,
+        return_post_pred_probs=True,
+    )
+
+    improved_consensus_label = np.argmax(improved_pred_probs, axis=1)
+
+    return improved_consensus_label
