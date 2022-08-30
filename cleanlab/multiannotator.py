@@ -359,17 +359,19 @@ def _get_quality_of_consensus(
         num_classes = pred_probs.shape[1]
 
         annotator_error = 1 - annotator_agreement_with_consensus_weighted
-        most_likely_class_error = np.mean(
-            consensus_label != np.argmax(np.bincount(consensus_label, minlength=num_classes))
-        )
-        normalized_annotator_accuracy = np.clip(
-            1 - (annotator_error / most_likely_class_error), a_min=0, a_max=None
-        )
 
         mask = labels_multiannotator.count(axis=1) != 1
         labels_multiannotator_subset = labels_multiannotator[mask]
         consensus_label_subset = consensus_label[mask]
         pred_probs_subset = pred_probs[mask]
+
+        most_likely_class_error = np.mean(
+            consensus_label_subset
+            != np.argmax(np.bincount(consensus_label_subset, minlength=num_classes))
+        )
+        normalized_annotator_accuracy = np.clip(
+            1 - (annotator_error / most_likely_class_error), a_min=0, a_max=None
+        )
 
         model_error = np.mean(np.argmax(pred_probs_subset, axis=1) != consensus_label_subset)
         w_model = np.max([(1 - (model_error / most_likely_class_error)), 0]) * np.sqrt(
@@ -683,16 +685,17 @@ def _get_annotator_quality(
         num_classes = pred_probs.shape[1]
 
         annotator_error = 1 - annotator_agreement_with_consensus_weighted
-        most_likely_class_error = np.mean(
-            consensus_label
-            != np.argmax(np.bincount(consensus_label.astype("int64"), minlength=num_classes))
-        )
-        w_annotator = np.clip(1 - (annotator_error / most_likely_class_error), a_min=0, a_max=None)
 
         mask = labels_multiannotator.count(axis=1) != 1
         labels_multiannotator_subset = labels_multiannotator[mask]
         consensus_label_subset = consensus_label[mask]
         pred_probs_subset = pred_probs[mask]
+
+        most_likely_class_error = np.mean(
+            consensus_label_subset
+            != np.argmax(np.bincount(consensus_label_subset.astype("int64"), minlength=num_classes))
+        )
+        w_annotator = np.clip(1 - (annotator_error / most_likely_class_error), a_min=0, a_max=None)
 
         model_error = np.mean(np.argmax(pred_probs_subset, axis=1) != consensus_label_subset)
         w_model = np.max([(1 - (model_error / most_likely_class_error)), 0]) * np.sqrt(
