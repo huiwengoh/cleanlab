@@ -216,10 +216,12 @@ def assert_valid_inputs_multiannotator(
     """Validate multi-annotator labels"""
     # Raise error if number of classes in labels_multiannoator does not match number of classes in pred_probs
     if pred_probs is not None:
+        if pred_probs.ndim == 3:  # more than one classifier (we take the average pred_probs)
+            pred_probs = np.mean(pred_probs, axis=0)
         num_classes = get_num_classes(pred_probs=pred_probs)
         unique_ma_labels = np.unique(labels_multiannotator.replace({pd.NA: np.NaN}).astype(float))
         unique_ma_labels = unique_ma_labels[~np.isnan(unique_ma_labels)]
-        if num_classes != len(unique_ma_labels):
+        if num_classes < len(unique_ma_labels):
             raise ValueError(
                 """The number of unique classes in labels_multiannotator do not match the number of classes in pred_probs.
                 Perhaps some rarely-annotated classes were lost while establishing consensus labels used to train your classifier."""

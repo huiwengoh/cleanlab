@@ -34,7 +34,7 @@ from cleanlab.internal.util import get_num_classes
 from cleanlab.internal.validation import assert_valid_inputs_multiannotator
 
 
-def get_label_quality_multiannotator(
+def get_label_quality_multiannotator_ind(
     labels_multiannotator: Union[pd.DataFrame, np.ndarray],
     pred_probs: np.ndarray,
     *,
@@ -865,7 +865,7 @@ def _get_post_pred_probs_and_weights(
                 np.argmax(prior_pred_probs_subset, axis=1) != consensus_label_subset
             )
             model_weight = np.max([(1 - (model_error / most_likely_class_error)), 1e-6]) * np.sqrt(
-                np.mean(num_annotations)
+                num_annotations
             )
 
             # compute weighted average
@@ -883,7 +883,7 @@ def _get_post_pred_probs_and_weights(
                             for annotator_label in example
                         ],
                         weights=np.concatenate(
-                            ([model_weight], adjusted_annotator_agreement[example_mask])
+                            ([model_weight[i]], adjusted_annotator_agreement[example_mask])
                         ),
                     )
                     for true_label in range(num_classes)
